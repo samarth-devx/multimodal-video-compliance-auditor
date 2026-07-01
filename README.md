@@ -6,6 +6,11 @@ Drop in a YouTube URL - the system downloads the video, extracts speech transcri
 
 ---
 
+##Demo
+
+https://youtu.be/BFPnt0vG3_U
+
+---
 
 ## 1) Tech Stack
 
