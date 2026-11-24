@@ -1,21 +1,21 @@
 import operator
-from typing import Annotated, List, Dict, Optional, Any, TypedDict
+from typing import Annotated, TypedDict
+
+from backend.src.schemas import Rule, Violation
 
 
-class ComplianceIssue(TypedDict):
-    category: str
-    description: str
-    severity: str
-    timestamp: Optional[str]
-
-
-class VideoAuditState(TypedDict):
+class AuditState(TypedDict, total=False):
+    # input
     video_url: str
     video_id: str
-    video_metadata: Dict[str, Any]
-    transcript: Optional[str]
-    ocr_text: List[str]
-    compliance_results: Annotated[List[ComplianceIssue], operator.add]
-    final_status: str
-    final_report: str
-    errors: Annotated[List[str], operator.add]
+    # stage 1: evidence
+    transcript: str
+    ocr_text: list[str]
+    video_metadata: dict
+    # stage 2: rules
+    rules: list[Rule]
+    # stage 3: verdict
+    violations: list[Violation]
+    status: str    # PASS | FAIL | ERROR
+    report: str
+    errors: Annotated[list[str], operator.add]

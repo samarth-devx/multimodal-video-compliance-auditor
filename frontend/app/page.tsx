@@ -6,6 +6,8 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { ArrowRight, Loader2, Video } from 'lucide-react'
+import { runAudit } from '@/lib/api'
+import { saveAudit } from '@/lib/audit-store'
 
 export default function Home() {
     const router = useRouter()
@@ -14,20 +16,15 @@ export default function Home() {
     const [error, setError] = useState('')
 
     async function handleAudit() {
-        if (!url.trim()) return setError('please enter a youtube url')
+        if (!url.trim()) return setError('Please enter a YouTube URL.')
         setLoading(true)
         setError('')
         try {
-            const res = await fetch('http://localhost:8000/audit', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ video_url: url })
-            })
-            const data = await res.json()
-            localStorage.setItem('auditResult', JSON.stringify(data))
+            const result = await runAudit(url.trim())
+            saveAudit(result)
             router.push('/results')
-        } catch {
-            setError('failed to connect to server. make sure the API is running.')
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Something went wrong.')
         } finally {
             setLoading(false)
         }
@@ -60,8 +57,9 @@ export default function Home() {
                         <Input
                             placeholder="https://youtu.be/..."
                             value={url}
+                            disabled={loading}
                             onChange={e => { setUrl(e.target.value); setError('') }}
-                            onKeyDown={e => e.key === 'Enter' && handleAudit()}
+                            onKeyDown={e => e.key === 'Enter' && !loading && handleAudit()}
                             className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
                         />
                         {error && <p className="text-red-400 text-xs">{error}</p>}
