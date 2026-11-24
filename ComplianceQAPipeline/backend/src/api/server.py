@@ -1,87 +1,71 @@
-import uuid
-import logging
 import asyncio
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List
-from dotenv import load_dotenv
+import logging
+import uuid
+from contextlib import asynccontextmanager
 
-load_dotenv(override=True)
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+
+from backend.src.config import get_settings
+
+settings = get_settings()  # loads .env before telemetry reads it
 
 from backend.src.api.telemetry import setup_telemetry
 setup_telemetry()
 
-from backend.src.graph.workflow import app as compliance_graph
+from backend.src.graph.workflow import build_graph
+from backend.src.schemas import AuditRequest, AuditResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mvca-api")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.graph = build_graph(settings)   # built once, not at import time
+    yield
+
+
 app = FastAPI(
     title="Multimodal Video Compliance Auditor API",
-    description="API for auditing YouTube ad content against FTC and brand compliance rules.",
-    version="1.0.0"
+    description="Audits YouTube ad content against FTC and brand compliance rules.",
+    version="1.1.0",
+    lifespan=lifespan,
 )
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=list(settings.cors_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-class AuditRequest(BaseModel):
-    video_url: str
-
-
-class ComplianceIssue(BaseModel):
-    category: str
-    severity: str
-    description: str
-
-
-class AuditResponse(BaseModel):
-    session_id: str
-    video_id: str
-    status: str
-    final_report: str
-    compliance_results: List[ComplianceIssue]
+def _to_response(session_id: str, video_id: str, state: dict) -> AuditResponse:
+    errors = state.get("errors")
+    if errors:
+        return AuditResponse(
+            session_id=session_id, video_id=video_id, status="ERROR",
+            final_report="Audit could not be completed: " + "; ".join(errors),
+            compliance_results=[],
+        )
+    return AuditResponse(
+        session_id=session_id, video_id=video_id, status=state["status"],
+        final_report=state["report"], compliance_results=state["violations"],
+    )
 
 
 @app.post("/audit", response_model=AuditResponse)
-async def audit_video(request: AuditRequest):
+async def audit_video(payload: AuditRequest, request: Request):
     session_id = str(uuid.uuid4())
-    video_id_short = f"vid_{session_id[:8]}"
+    video_id = f"vid_{session_id[:8]}"
+    logger.info("Audit request %s (session %s)", payload.video_url, session_id)
 
-    logger.info(f"Audit Request: {request.video_url} (Session: {session_id})")
-
-    initial_inputs = {
-        "video_url": request.video_url,
-        "video_id": video_id_short,
-        "compliance_results": [],
-        "errors": []
-    }
-
-    try:
-        loop = asyncio.get_event_loop()
-        final_state = await loop.run_in_executor(
-            None,
-            lambda: compliance_graph.invoke(initial_inputs)
-        )
-
-        return AuditResponse(
-            session_id=session_id,
-            video_id=final_state.get("video_id"),
-            status=final_state.get("final_status", "UNKNOWN"),
-            final_report=final_state.get("final_report", "No report generated."),
-            compliance_results=final_state.get("compliance_results", [])
-        )
-
-    except Exception as e:
-        logger.error(f"Audit Failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Workflow Execution Failed: {str(e)}")
+    state = await asyncio.to_thread(
+        request.app.state.graph.invoke,
+        {"video_url": payload.video_url, "video_id": video_id, "errors": []},
+    )
+    return _to_response(session_id, video_id, state)
 
 
 @app.get("/health")

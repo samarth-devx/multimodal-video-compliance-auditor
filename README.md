@@ -1,171 +1,182 @@
 # Multimodal Video Compliance Auditor
 
-An AI-powered pipeline that automatically audits YouTube video advertisements for regulatory and brand compliance, using multimodal understanding, retrieval-augmented generation (RAG), and agentic workflow orchestration. 
+Paste a YouTube ad URL and get a compliance verdict against FTC and YouTube advertising rules. Every violation comes with the exact quote, the timestamp, and a severity, so a reviewer can verify each finding instead of trusting the model.
 
-Drop in a YouTube URL - the system downloads the video, extracts speech transcripts and on-screen text via Azure Video Indexer, retrieves relevant FTC and platform policy rules from a vector knowledge base, and lets GPT-4o reason over all of it to produce a structured compliance report with pass/fail decisions and per-violation severity ratings along with supporting evidence.
+![Architecture](architecture.png)
 
----
+## How it works
 
-## Demo
+The audit is a three-stage pipeline orchestrated with LangGraph: **Evidence → Rules → Verdict**.
 
-https://youtu.be/BFPnt0vG3_U
+| Stage | What happens | Tech |
+|---|---|---|
+| 1. Extract evidence | The ad is downloaded and indexed to produce a timestamped transcript and on-screen text (OCR) | yt-dlp, Azure Video Indexer |
+| 2. Retrieve rules | One targeted query per compliance category against the policy knowledge base (FTC and YouTube guideline PDFs), results deduplicated | Azure AI Search, Azure OpenAI embeddings |
+| 3. Judge | An LLM compares the evidence against the retrieved rules and returns structured violations; **PASS/FAIL is decided in code** | Azure OpenAI, Pydantic |
 
----
+If any stage fails, the graph stops and the API returns a distinct `ERROR` status instead of a misleading verdict.
 
-## 1) Tech Stack
+## Design decisions
 
-| Layer | Technologies |
-| :--- | :--- |
- **Backend** | Python 3.13 , FastAPI , LangGraph , LangChain  |
-| **AI & Orchestration** | Azure Video Indexer (transcript + OCR) , Azure OpenAI GPT-4o , Azure AI Search (RAG) |
-| **Observability** | LangSmith , Azure Monitor |
-| **Frontend & Routing** | Next.js , Tailwind CSS , shadcn/ui |
+- **Code decides PASS/FAIL, not the LLM.** The model finds and explains violations. The policy (any CRITICAL or MAJOR violation fails the ad) is an explicit, testable function in `services/judge.py`.
+- **Structured output instead of parsing text.** The verdict is validated against a Pydantic schema, so malformed output fails loudly rather than silently.
+- **Per-category retrieval.** Each of the seven compliance categories gets its own short query. Embedding a whole transcript as one query produces a diluted vector.
+- **Evidence-first findings.** Each violation must include a verbatim quote and the timestamp it came from.
+- **Dependency injection.** The retriever, indexer and LLM are injected into the graph nodes. The `RuleRetriever` protocol means the retrieval backend can be swapped without touching the pipeline, and the nodes can be unit-tested without Azure.
+- **Fail-fast configuration.** All environment variables are validated once at startup.
 
----
+## Compliance categories checked
 
-## 2) Architecture & System Design
+FTC disclosure · Claim validation · Endorsement disclosure · Ad specs · Misleading content · Professional misrepresentation · Trademark
 
-### System Overview Diagram
+## Tech stack
 
-![Architecture](./architecture.png)
+**Backend:** Python, FastAPI, LangGraph, LangChain, Pydantic, Azure OpenAI, Azure AI Search, Azure Video Indexer, Azure Monitor (OpenTelemetry)
+**Frontend:** Next.js, React, TypeScript, Tailwind CSS, shadcn/ui
 
-### Core System Components
+## Project structure
 
-**Video Processing Layer**
-Downloads YouTube videos via yt-dlp, uploads to Azure Video Indexer, and extracts speech transcript, OCR text, and visual metadata.
+```
+ComplianceQAPipeline/
+├── main.py                       # CLI entry point
+└── backend/
+    ├── data/                     # policy PDFs (knowledge base source)
+    ├── scripts/index_documents.py  # chunk, embed and index the PDFs
+    ├── src/
+    │   ├── config.py             # validated settings
+    │   ├── schemas.py            # Pydantic models and API contract
+    │   ├── prompts.py            # prompts and category guide
+    │   ├── api/                  # FastAPI app, telemetry
+    │   ├── graph/                # LangGraph state, nodes, workflow
+    │   └── services/             # downloader, video indexer, retriever, judge
+    └── tests/
+frontend/                         # Next.js UI
+```
 
-**Knowledge Base (RAG)**
-FTC influencer guidelines and YouTube ad policy PDFs are chunked, embedded via `text-embedding-3-small`, and stored in Azure AI Search for semantic retrieval at audit time.
-
-**LangGraph Workflow**
-Two-node DAG: Indexer node handles video ingestion and extraction, Auditor node handles RAG retrieval and GPT-4o compliance reasoning. Each node is isolated and independently extensible.
-
-**Compliance Reasoning Engine**
-GPT-4o evaluates the transcript and OCR against retrieved FTC rules, checking for missing disclosures, unsubstantiated claims, misleading content, trademark misuse, and more. Returns structured JSON with per-violation severity ratings.
-
-**Observability**
-LangSmith traces every LLM call end-to-end. Azure Application Insights captures API latency, failures, and telemetry.
-
-
----
-
-## 3) Getting Started
+## Getting started
 
 ### Prerequisites
-- Python 3.13+
+
+- Python 3.11+ and [uv](https://docs.astral.sh/uv/)
 - Node.js 18+
-- Azure account with: OpenAI, Video Indexer, AI Search, Application Insights
-- Azure CLI installed and logged in (`az login`)
+- An Azure subscription with: Azure OpenAI (chat and embedding deployments), Azure AI Search, and Azure Video Indexer
+- Azure credentials available to `DefaultAzureCredential` (for example `az login`)
 
-### Clone Repository
-```bash
-git clone https://github.com/yourusername/multimodal-video-compliance-auditor.git
-cd multimodal-video-compliance-auditor
-```
+### 1. Configure environment
 
+Create `ComplianceQAPipeline/.env`:
 
-### Backend Setup
-```bash
-cd ComplianceQAPipeline
-uv sync
-```
-
-Create .env file:
 ```env
-AZURE_OPENAI_API_KEY=
 AZURE_OPENAI_ENDPOINT=
-AZURE_OPENAI_API_VERSION=
+AZURE_OPENAI_API_KEY=
+AZURE_OPENAI_API_VERSION=2024-02-01
 AZURE_OPENAI_CHAT_DEPLOYMENT=
-AZURE_OPENAI_EMBEDDING_DEPLOYMENT=
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small
 
 AZURE_SEARCH_ENDPOINT=
 AZURE_SEARCH_API_KEY=
 AZURE_SEARCH_INDEX_NAME=
 
-AZURE_VI_NAME=
-AZURE_VI_LOCATION=
 AZURE_VI_ACCOUNT_ID=
+AZURE_VI_LOCATION=
+AZURE_VI_NAME=
 AZURE_SUBSCRIPTION_ID=
 AZURE_RESOURCE_GROUP=
 
+# optional
 APPLICATIONINSIGHTS_CONNECTION_STRING=
-
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_ENDPOINT=
-LANGCHAIN_API_KEY=
-LANGCHAIN_PROJECT=
+CORS_ORIGINS=http://localhost:3000
 ```
 
-Index the compliance PDFs:
+### 2. Index the policy documents
+
 ```bash
-uv run python backend/scripts/index_documents.py
+cd ComplianceQAPipeline
+uv sync
+uv run python -m backend.scripts.index_documents
 ```
 
-Start the backend:
+### 3. Run the API
+
 ```bash
 uv run uvicorn backend.src.api.server:app --reload
 ```
-### Frontend Setup
+
+The API runs at `http://localhost:8000` (interactive docs at `/docs`).
+
+### 4. Run the frontend
+
 ```bash
 cd frontend
+echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
 npm install
 npm run dev
 ```
 
-Open **http://localhost:3000**
+Open `http://localhost:3000`.
 
----
+### CLI usage
 
-## 4) API
+```bash
+uv run python main.py "https://youtu.be/<video-id>"
+```
 
-**POST** `/audit`
+### Tests
+
+```bash
+uv run pytest
+```
+
+## API
+
+`POST /audit`
+
 ```json
 { "video_url": "https://youtu.be/..." }
 ```
 
 Response:
+
 ```json
 {
-  "session_id": "uuid",
-  "video_id": "vid_xxxxxxxx",
+  "session_id": "…",
+  "video_id": "vid_ab12cd34",
   "status": "FAIL",
+  "final_report": "Summary and recommended actions…",
   "compliance_results": [
     {
       "category": "FTC Disclosure",
       "severity": "CRITICAL",
-      "description": "No paid partnership disclosure found..."
+      "description": "Sponsored content with no clear disclosure.",
+      "evidence": "exact quote from the video",
+      "timestamp": "0:00:12"
     }
-  ],
-  "final_report": "Summary of findings and recommended actions..."
+  ]
 }
 ```
 
-**GET** `/health`
-```json
-{ "status": "healthy", "service": "Multimodal Video Compliance Auditor" }
-```
+`status` is one of `PASS`, `FAIL`, or `ERROR`. `GET /health` is a liveness check.
 
----
+## Evaluation
 
-## 5) Engineering Highlights
+<!-- fill in: only report numbers you have actually measured -->
 
-- Modular LangGraph two-node DAG architecture (Indexer → Auditor)
-- Multimodal reasoning over transcript, OCR, and visual metadata
-- RAG pipeline over real FTC and YouTube policy documents
-- Unique temp file naming per session to prevent race conditions
-- Non-blocking async FastAPI with `run_in_executor` for long-running workflow
-- Module-level LLM and vector store initialization to avoid per-request overhead
-- End-to-end observability with LangSmith tracing and Azure Application Insights
-- Clean TypeScript frontend with full type safety
+| Metric | Result |
+|---|---|
+| Labeled ads | N |
+| Violation detection precision | – |
+| Violation detection recall | – |
 
----
+## Limitations
 
-## 6) Future Improvements
+- Video analysis (transcription, OCR) relies on Azure Video Indexer, so audit quality depends on its extraction.
+- Only YouTube URLs are supported.
+- `/audit` is synchronous and takes a few minutes per video.
+- The LLM can over-flag or miss violations. Findings carry evidence so a human can verify them, but this is a review aid, not legal advice.
 
-- Real-time streaming video analysis
-- PDF compliance report export
-- CI/CD pipeline with GitHub Actions
-- Support for TikTok, Instagram Reels, and other ad platforms
+## Roadmap
 
----
-
+- **Async job processing:** return a job ID from `POST /audit` and stream per-stage progress (extract, retrieve, judge) to the UI, instead of holding one request open for minutes
+- **Parallel category judging:** run the seven compliance checks concurrently to cut latency, with retries and validation-error recovery on malformed LLM output
+- **Multi-source input:** support direct video file uploads and other platforms, not just YouTube URLs
+- **Audit history and reporting:** persist past audits in a database, with search, filtering by category or severity, and PDF export of reports

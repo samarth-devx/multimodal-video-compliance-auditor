@@ -1,64 +1,45 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Shield, ArrowLeft, ArrowRight, CheckCircle, XCircle, AlertTriangle, AlertCircle } from 'lucide-react'
+import { Shield, ArrowLeft, ArrowRight, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
+import { ViolationCard } from '@/components/ViolationCard'
+import { loadAudit } from '@/lib/audit-store'
+import type { AuditResult, AuditStatus } from '@/lib/types'
 
-interface ComplianceIssue {
-    category: string
-    severity: string
-    description: string
-}
-
-interface AuditResult {
-    session_id: string
-    video_id: string
-    status: string
-    final_report: string
-    compliance_results: ComplianceIssue[]
-}
-
-function getAuditData(): AuditResult | null {
-    if (typeof window === 'undefined') return null
-    const stored = localStorage.getItem('auditResult')
-    if (!stored) return null
-    return JSON.parse(stored) as AuditResult
+const STATUS_UI: Record<AuditStatus, { color: string; Icon: typeof CheckCircle }> = {
+    PASS: { color: '#7ce04a', Icon: CheckCircle },
+    FAIL: { color: '#ef4444', Icon: XCircle },
+    ERROR: { color: '#eab308', Icon: AlertTriangle },
 }
 
 export default function Results() {
     const router = useRouter()
-    const data = getAuditData()
+    const [data, setData] = useState<AuditResult | null>(null)
 
-    if (!data) {
-        router.push('/')
-        return null
-    }
+    useEffect(() => {
+        const stored = loadAudit()
+        if (stored) setData(stored)
+        else router.replace('/')
+    }, [router])
 
-    const isPassed = data.status === 'PASS'
+    if (!data) return null
 
-    const severityColor = (severity: string) => {
-        switch (severity?.toUpperCase()) {
-            case 'CRITICAL': return '#ef4444'
-            case 'MAJOR': return '#f97316'
-            case 'MODERATE': return '#eab308'
-            case 'WARNING': return '#eab308'
-            default: return '#6b7280'
-        }
-    }
+    const { color, Icon } = STATUS_UI[data.status] ?? STATUS_UI.ERROR
+    const isError = data.status === 'ERROR'
+    const violations = data.compliance_results ?? []
 
     return (
         <div className="max-w-2xl mx-auto px-4 py-10">
             <div className="flex items-center justify-between mb-8">
                 <div className="flex items-center gap-3">
-                    {isPassed
-                        ? <CheckCircle size={28} color="#7ce04a" />
-                        : <XCircle size={28} color="#ef4444" />}
+                    <Icon size={28} color={color} />
                     <div>
                         <p className="text-xs text-muted-foreground">audit result</p>
-                        <h1 className="text-2xl font-medium tracking-tight" style={{ color: isPassed ? '#7ce04a' : '#ef4444' }}>
-                            {isPassed ? 'PASS' : 'FAIL'}
+                        <h1 className="text-2xl font-medium tracking-tight" style={{ color }}>
+                            {data.status}
                         </h1>
                     </div>
                 </div>
@@ -76,40 +57,27 @@ export default function Results() {
                 </CardContent>
             </Card>
 
-            <Card className="bg-card border-border mb-4">
-                <CardHeader>
-                    <CardTitle className="text-sm font-medium tracking-tight inline-flex items-center gap-2">
-                        <AlertTriangle size={14} color="#eab308" />
-                        violations detected ({data.compliance_results?.length || 0})
-                    </CardTitle>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-3">
-                    {data.compliance_results?.length === 0
-                        ? <p className="text-muted-foreground text-sm">no violations found.</p>
-                        : data.compliance_results?.map((issue, i) => (
-                            <div key={i} className="border border-border rounded-lg p-3">
-                                <div className="flex items-center gap-2 mb-1.5">
-                                    <AlertCircle size={12} color={severityColor(issue.severity)} />
-                                    <Badge
-                                        variant="secondary"
-                                        className="text-xs font-medium tracking-tight"
-                                        style={{ color: severityColor(issue.severity) }}
-                                    >
-                                        {issue.severity}
-                                    </Badge>
-                                    <span className="text-sm font-medium tracking-tight">{issue.category}</span>
-                                </div>
-                                <p className="text-muted-foreground text-xs leading-relaxed">{issue.description}</p>
-                            </div>
-                        ))}
-                </CardContent>
-            </Card>
+            {!isError && (
+                <Card className="bg-card border-border mb-4">
+                    <CardHeader>
+                        <CardTitle className="text-sm font-medium tracking-tight inline-flex items-center gap-2">
+                            <AlertTriangle size={14} color="#eab308" />
+                            violations detected ({violations.length})
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-3">
+                        {violations.length === 0
+                            ? <p className="text-muted-foreground text-sm">no violations found.</p>
+                            : violations.map((v, i) => <ViolationCard key={i} violation={v} />)}
+                    </CardContent>
+                </Card>
+            )}
 
             <Card className="bg-card border-border mb-6">
                 <CardHeader>
                     <CardTitle className="text-sm font-medium tracking-tight inline-flex items-center gap-2">
                         <Shield size={14} color="#7ce04a" />
-                        final summary
+                        {isError ? 'what went wrong' : 'final summary'}
                     </CardTitle>
                 </CardHeader>
                 <CardContent>

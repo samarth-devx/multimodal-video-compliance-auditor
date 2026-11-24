@@ -1,57 +1,25 @@
+import logging
 import sys
 import uuid
-import json
-import logging
-from dotenv import load_dotenv
 
-load_dotenv(override=True)
+from backend.src.graph.workflow import build_graph
 
-from backend.src.graph.workflow import app
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("mvca-runner")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
-def run_cli_simulation(video_url: str):
-    session_id = str(uuid.uuid4())
-    logger.info(f"Starting Audit Session: {session_id}")
+def main(url: str):
+    video_id = f"vid_{uuid.uuid4().hex[:8]}"
+    state = build_graph().invoke({"video_url": url, "video_id": video_id, "errors": []})
 
-    initial_inputs = {
-        "video_url": video_url,
-        "video_id": f"vid_{session_id[:8]}",
-        "compliance_results": [],
-        "errors": []
-    }
-
-    print("\n--- Input Payload ---")
-    print(json.dumps(initial_inputs, indent=2))
-
-    try:
-        final_state = app.invoke(initial_inputs)
-
-        print("\n=== COMPLIANCE AUDIT REPORT ===")
-        print(f"Video ID: {final_state.get('video_id')}")
-        print(f"Status:   {final_state.get('final_status')}")
-        print("\n[ VIOLATIONS DETECTED ]")
-
-        results = final_state.get('compliance_results', [])
-        if results:
-            for issue in results:
-                print(f"- [{issue.get('severity')}] {issue.get('category')}: {issue.get('description')}")
-        else:
-            print("No violations found.")
-
-        print("\n[ FINAL SUMMARY ]")
-        print(final_state.get('final_report'))
-
-    except Exception as e:
-        logger.error(f"Workflow Execution Failed: {str(e)}")
-        raise e
+    if state.get("errors"):
+        print("ERROR:", "; ".join(state["errors"]))
+        return
+    print(f"\nStatus: {state['status']}\n")
+    for v in state["violations"]:
+        print(f"- [{v.severity.value}] {v.category.value} @ {v.timestamp or '?'}: {v.description}")
+        print(f"    evidence: {v.evidence}")
+    print(f"\n{state['report']}")
 
 
 if __name__ == "__main__":
-    url = sys.argv[1] if len(sys.argv) > 1 else "https://youtu.be/dT7S75eYhcQ"
-    run_cli_simulation(url)
+    main(sys.argv[1] if len(sys.argv) > 1 else "https://youtu.be/dT7S75eYhcQ")
